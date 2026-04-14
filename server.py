@@ -280,17 +280,16 @@ def create_http_app():
 # ─── Main ───
 
 async def main():
-    # Start WebSocket server for extension — bind to all interfaces so
-    # both localhost and 127.0.0.1 resolve
-    log.info("Starting WebSocket server on ws://127.0.0.1:8765")
-    ws_server = await serve(ws_handler, "127.0.0.1", 8765)
+    # Bind to 0.0.0.0 to listen on all network interfaces —
+    # accessible via localhost, 127.0.0.1, or the machine's LAN IP.
+    log.info("Starting WebSocket server on ws://0.0.0.0:8765")
+    ws_server = await serve(ws_handler, "0.0.0.0", 8765)
 
-    # Start HTTP control API on 127.0.0.1 so Guzzle/PHP reach it reliably on Windows
-    log.info("Starting HTTP control API on http://127.0.0.1:8766")
+    log.info("Starting HTTP control API on http://0.0.0.0:8766")
     http_app = create_http_app()
     runner = web.AppRunner(http_app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 8766)
+    site = web.TCPSite(runner, "0.0.0.0", 8766)
     await site.start()
 
     log.info("Server is running. Use CLI commands from another terminal.")
