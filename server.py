@@ -7,13 +7,23 @@ Also runs an HTTP control API on port 8766 so CLI commands
 import asyncio
 import json
 import logging
+import os
 import random
 import uuid
 from http import HTTPStatus
 from aiohttp import web
+from dotenv import load_dotenv
 from websockets.asyncio.server import serve
 from api_client import ApiClient
 from parsers import parse_rent, parse_beds, parse_baths
+
+load_dotenv()
+
+# Bind host + ports (configurable via .env) — defaults keep the server
+# reachable only from the local machine unless overridden.
+SERVER_HOST = os.getenv("SERVER_HOST", "127.0.0.1")
+WS_PORT     = int(os.getenv("WS_PORT", "8765"))
+HTTP_PORT   = int(os.getenv("HTTP_PORT", "8766"))
 
 
 # Wraps a blocking ApiClient method so it runs in a thread — prevents it from
@@ -280,16 +290,17 @@ def create_http_app():
 # ─── Main ───
 
 async def main():
-    # Bind to 0.0.0.0 to listen on all network interfaces —
-    # accessible via localhost, 127.0.0.1, or the machine's LAN IP.
-    log.info("Starting WebSocket server on ws://0.0.0.0:8765")
-    ws_server = await serve(ws_handler, "0.0.0.0", 8765)
+    # Host/ports come from .env (SERVER_HOST, WS_PORT, HTTP_PORT).
+    # Default is 127.0.0.1 — override with 0.0.0.0 to expose on all interfaces,
+    # or a specific IP to bind to one network interface.
+    log.info(f"Starting WebSocket server on ws://{SERVER_HOST}:{WS_PORT}")
+    ws_server = await serve(ws_handler, SERVER_HOST, WS_PORT)
 
-    log.info("Starting HTTP control API on http://0.0.0.0:8766")
+    log.info(f"Starting HTTP control API on http://{SERVER_HOST}:{HTTP_PORT}")
     http_app = create_http_app()
     runner = web.AppRunner(http_app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8766)
+    site = web.TCPSite(runner, SERVER_HOST, HTTP_PORT)
     await site.start()
 
     log.info("Server is running. Use CLI commands from another terminal.")
