@@ -12,7 +12,22 @@
 let ws = null;
 let reconnectTimer = null;
 let pingTimer = null;
-const WS_URL = "ws://localhost:8765";
+const DEFAULT_WS_URL = "ws://localhost:8765";
+
+async function getWsUrl() {
+  const { wsUrl } = await chrome.storage.local.get("wsUrl");
+  return (wsUrl && wsUrl.trim()) || DEFAULT_WS_URL;
+}
+
+// Reconnect whenever the user updates the configured URL
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.wsUrl) {
+    console.log("[BG] WS URL changed — reconnecting");
+    if (ws) { try { ws.close(); } catch (_) {} }
+    ws = null;
+    connect();
+  }
+});
 
 // Track the active tab we're controlling
 let activeTabId = null;
@@ -34,7 +49,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ─── WebSocket connection ───
 
-function connect() {
+async function connect() {
   if (ws && ws.readyState === WebSocket.OPEN) return;
 
   // Clean up any dead socket
@@ -43,8 +58,10 @@ function connect() {
     ws = null;
   }
 
+  const url = await getWsUrl();
   try {
-    ws = new WebSocket(WS_URL);
+    ws = new WebSocket(url);
+    console.log("[BG] Connecting to", url);
   } catch (e) {
     console.error("[BG] WebSocket creation failed:", e);
     scheduleReconnect();
@@ -216,10 +233,14 @@ async function cmdForwardToContent(msg, cmdId) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "get_status") {
-    sendResponse({
-      connected: ws && ws.readyState === WebSocket.OPEN,
-      activeTabId,
-    });
+    (async () => {
+      const wsUrl = await getWsUrl();
+      sendResponse({
+        connected: ws && ws.readyState === WebSocket.OPEN,
+        activeTabId,
+        wsUrl,
+      });
+    })();
     return true;
   }
   if (msg.type === "connect") {
