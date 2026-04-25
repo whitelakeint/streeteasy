@@ -170,6 +170,31 @@ async def trigger_scrape():
         scrape_running = False
 
 
+async def trigger_single_scrape(url_id):
+    """Scrape a single URL by its ID."""
+    global scrape_running
+    if scrape_running:
+        log.warning("Scrape already in progress — ignoring single-URL request.")
+        return
+
+    scrape_running = True
+    log.info(f"Single-URL scrape triggered for url_id={url_id}.")
+
+    try:
+        if not extension_ws:
+            log.info("Extension not connected — waiting up to 60s...")
+            if not await wait_for_extension(60):
+                log.error("Extension did not connect within timeout. Aborting.")
+                return
+
+        await run_scrape_single(url_id)
+        log.info(f"Single-URL scrape finished for url_id={url_id}.")
+    except Exception as e:
+        log.error(f"Single-URL scrape failed: {e}")
+    finally:
+        scrape_running = False
+
+
 async def run_scrape_pipeline():
     """Main scraping pipeline. Scrapes all active URLs."""
     urls = await run_blocking(api.get_active_urls)
@@ -261,6 +286,72 @@ async def run_scrape_pipeline():
     await run_blocking(api.log,"info", "pipeline_done", "All URLs processed")
 
 
+async def run_scrape_single(url_id):
+    """Scrape a single URL by ID — same pipeline steps as the full run."""
+    urls = await run_blocking(api.get_active_urls)
+    row = next((u for u in urls if u["id"] == url_id), None)
+    if not row:
+        log.error(f"URL id={url_id} not found or not active.")
+        await run_blocking(api.log, "error", "single_scrape_fail", f"URL id={url_id} not found or inactive")
+        return
+
+    url = row["url"]
+    name = row["name"]
+
+    log.info(f"[{url_id}] Scraping (single): {name} -> {url}")
+    await run_blocking(api.update_url_status, url_id, "in_progress")
+    await run_blocking(api.log, "info", "single_scrape_start", f"Single scrape: {name}", url_id=url_id, context={"url": url})
+
+    try:
+        resp = await send_command({"type": "navigate", "url": url})
+        log.info(f"  Navigation complete")
+        await run_blocking(api.log, "info", "navigate_done", "Page loaded", url_id=url_id)
+
+        if not await check_and_solve_captcha("navigation"):
+            await run_blocking(api.update_url_status, url_id, "failed")
+            await run_blocking(api.log, "error", "captcha_fail", "Captcha solve failed after navigation", url_id=url_id)
+            return
+
+        total_show_more_clicks = 0
+        while True:
+            resp = await send_command({"type": "click_show_more"})
+            total_show_more_clicks += resp.get("clicked", 0)
+
+            if resp.get("captcha_detected"):
+                log.info(f"  Captcha appeared after {total_show_more_clicks} click(s) — solving...")
+                await run_blocking(api.log, "warn", "captcha_mid_loop", f"Captcha appeared after {total_show_more_clicks} click(s)", url_id=url_id)
+                if not await check_and_solve_captcha("click_show_more"):
+                    break
+                continue
+            else:
+                break
+
+        log.info(f"  Clicked 'Show more' buttons {total_show_more_clicks} time(s) total")
+
+        if not await check_and_solve_captcha("post_click_show_more"):
+            await run_blocking(api.update_url_status, url_id, "failed")
+            await run_blocking(api.log, "error", "captcha_fail", "Captcha solve failed after show-more loop", url_id=url_id)
+            return
+
+        resp = await send_command({"type": "extract_data"})
+        properties = resp.get("properties", [])
+        log.info(f"  Extracted {len(properties)} properties")
+
+        for p in properties:
+            p["rent"] = parse_rent(p.get("rent"))
+            p["beds_no"] = parse_beds(p.get("beds"))
+            p["baths_no"] = parse_baths(p.get("baths"))
+        await run_blocking(api.save_properties, url_id, properties)
+        await run_blocking(api.update_url_status, url_id, "completed")
+        log.info(f"  Saved to database. Done.")
+        await run_blocking(api.log, "info", "single_scrape_done", f"Saved {len(properties)} properties", url_id=url_id, context={"count": len(properties)})
+
+    except Exception as e:
+        log.error(f"  FAILED: {e}")
+        await run_blocking(api.update_url_status, url_id, "failed")
+        await run_blocking(api.log, "error", "single_scrape_fail", str(e), url_id=url_id, context={"name": name, "url": url})
+
+
 # ─── HTTP Control API (port 8766) ───
 
 async def handle_scrape(request):
@@ -269,6 +360,15 @@ async def handle_scrape(request):
         return web.json_response({"ok": False, "message": "Scrape already in progress"})
     asyncio.create_task(trigger_scrape())
     return web.json_response({"ok": True, "message": "Scrape started"})
+
+
+async def handle_scrape_single(request):
+    """POST /scrape/{url_id} — trigger a single-URL scrape."""
+    url_id = int(request.match_info["url_id"])
+    if scrape_running:
+        return web.json_response({"ok": False, "message": "Scrape already in progress"})
+    asyncio.create_task(trigger_single_scrape(url_id))
+    return web.json_response({"ok": True, "message": f"Single scrape started for URL {url_id}"})
 
 
 async def handle_status(request):
@@ -283,6 +383,7 @@ async def handle_status(request):
 def create_http_app():
     app = web.Application()
     app.router.add_post("/scrape", handle_scrape)
+    app.router.add_post("/scrape/{url_id}", handle_scrape_single)
     app.router.add_get("/status", handle_status)
     return app
 
