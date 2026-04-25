@@ -16,15 +16,22 @@ Usage:
 """
 
 import sys
+import os
 import asyncio
 import urllib.request
 import urllib.error
 import json
 from datetime import date, datetime
+from dotenv import load_dotenv
 from db_setup import create_database
 from db_manager import DBManager
 
-SERVER_URL = "http://localhost:8766"
+load_dotenv()
+
+_host = os.getenv("SERVER_HOST", "127.0.0.1")
+_port = os.getenv("HTTP_PORT", "8766")
+_cli_host = "127.0.0.1" if _host == "0.0.0.0" else _host
+SERVER_URL = f"http://{_cli_host}:{_port}"
 
 
 def print_usage():
@@ -132,7 +139,6 @@ def cmd_status():
     resp = server_request("GET", "/status")
     print(f"  Extension : {resp['extension']}")
     print(f"  Scraper   : {resp['scraper']}")
-    print(f"  Active URLs: {resp['active_urls']}")
 
 
 def main():
