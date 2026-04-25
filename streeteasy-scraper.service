@@ -1,0 +1,20 @@
+[Unit]
+Description=StreetEasy Scraper Server (WebSocket + HTTP Control API)
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=streeteasy
+Group=streeteasy
+WorkingDirectory=/opt/streeteasy
+EnvironmentFile=/opt/streeteasy/.env
+ExecStart=/opt/streeteasy/venv/bin/python server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=streeteasy-scraper
+
+[Install]
+WantedBy=multi-user.target
